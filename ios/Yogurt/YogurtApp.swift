@@ -16,7 +16,6 @@ struct YogurtApp: App {
                     Text(S.storeFailed).foregroundStyle(Theme.muted).multilineTextAlignment(.center).padding(32)
                 }
             }
-            .tint(Theme.accent)
         }
     }
 }
@@ -173,6 +172,12 @@ final class AppModel {
 
     /// An edit made on this iPhone is in the Store: show it everywhere now, even with no computer to sync with.
     func edited() { edits &+= 1 }
+
+    func waitsToSync(_ id: String) -> Bool {
+        guard engine.status.isPaired, !store.staysOnPhone(id) else { return false }
+        if case .connected = engine.status { return false }
+        return true
+    }
 
     /// Queues an edit for the computer and lets sync send it.
     func send(_ op: Op) {

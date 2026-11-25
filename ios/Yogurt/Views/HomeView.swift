@@ -14,7 +14,8 @@ enum Route: Hashable {
 struct HomeView: View {
     @Environment(AppModel.self) private var model
     @State private var path: [Route] = []
-    @State private var folder: String?
+    @State private var filter = MeetingFilter.all
+    @State private var queuedTrashNotice: UUID?
     @State private var showSettings = false
     @State private var showConnect = false
     @State private var showRecord = false
@@ -26,18 +27,26 @@ struct HomeView: View {
                 .toolbar(.hidden, for: .navigationBar)
                 .navigationDestination(for: Route.self) { route in
                     switch route {
-                    case .meeting(let id): NoteView(meetingId: id)
-                    case .transcript(let id, let atMs): NoteView(meetingId: id, atMs: atMs)
+                    case .meeting(let id): NoteView(meetingId: id, trashed: didTrash)
+                    case .transcript(let id, let atMs): NoteView(meetingId: id, atMs: atMs, trashed: didTrash)
                     case .search: SearchView(open: { path.append(.meeting($0)) })
                     case .ask(let id): AskView(meetingId: id)
                     }
                 }
         }
+        .overlay(alignment: .bottom) {
+            if queuedTrashNotice != nil { NoteToast(text: S.changeQueued) }
+        }
+        .task(id: queuedTrashNotice) {
+            guard queuedTrashNotice != nil else { return }
+            do { try await Task.sleep(for: .seconds(3)) } catch { return }
+            withAnimation { queuedTrashNotice = nil }
+        }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showConnect) { ConnectSheet() }
         .fullScreenCover(isPresented: $showRecord) {
             RecordView(saved: { path.append(.meeting($0)) },
-                       preview: UserDefaults.standard.bool(forKey: "previewRecording"))
+                       preview: UserDefaults.standard.bool(forKey: "previewRecording"), trashed: didTrash)
         }
         .onAppear(perform: applyLaunch)
         // recordings a crash left behind, and notes not written yet
@@ -47,21 +56,26 @@ struct HomeView: View {
     private var list: some View {
         let _ = model.revision
         let folders = model.store.folders()
-        let shownFolder = folders.contains { $0.id == folder } ? folder : nil
-        let meetings = model.store.meetings(folder: shownFolder)
-        let filed = shownFolder == nil ? folderMap(folders) : [:]
+        let hasTrash = model.store.hasTrashedMeetings
+        let shown: MeetingFilter = switch filter {
+        case .trash where !hasTrash: .all
+        case .folder(let id) where !folders.contains(where: { $0.id == id }): .all
+        default: filter
+        }
+        let meetings = model.store.meetings(folder: shown.folderID, trashed: shown == .trash)
+        let filed = shown == .all ? folderMap(folders) : [:]
         let alone = !model.engine.status.isPaired
         let recordings = Dictionary(model.store.localRecordings().map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         return ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                if !folders.isEmpty {
-                    FolderFilter(folders: folders, selected: shownFolder) { picked in
-                        withAnimation(.easeOut(duration: 0.18)) { folder = picked }
+                if !folders.isEmpty || hasTrash {
+                    FolderFilter(folders: folders, hasTrash: hasTrash, selected: shown) { picked in
+                        withAnimation(.easeOut(duration: 0.18)) { filter = picked }
                     }
                     .padding(.top, 8)
                 }
                 if meetings.isEmpty {
-                    EmptyMeetings(inFolder: shownFolder != nil, alone: alone).padding(.top, 72)
+                    EmptyMeetings(inFolder: shown.folderID != nil, alone: alone).padding(.top, 72)
                 } else {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(days(meetings), id: \.label) { day in
@@ -85,6 +99,7 @@ struct HomeView: View {
             }
             .padding(.horizontal, 20)
         }
+        .onChange(of: shown) { _, value in filter = value }
         .scrollIndicators(.hidden)
         .background(Theme.bg)
         .refreshable { await model.engine.syncNow() }
@@ -173,6 +188,10 @@ struct HomeView: View {
         return out
     }
 
+    private func didTrash(_ id: String) {
+        if model.waitsToSync(id) { queuedTrashNotice = UUID() }
+    }
+
     private func applyLaunch() {
         #if DEBUG
         let d = UserDefaults.standard
@@ -184,7 +203,7 @@ struct HomeView: View {
         if d.bool(forKey: "openSettings") { showSettings = true }
         if d.bool(forKey: "openConnect") { showConnect = true }
         if d.bool(forKey: "openRecord") { showRecord = true }
-        if let f = d.string(forKey: "openFolder") { folder = f }
+        if let f = d.string(forKey: "openFolder") { filter = .folder(f) }
         #endif
     }
 }
@@ -206,17 +225,27 @@ struct IconButton: View {
     }
 }
 
-/// All meetings, or one folder's.
-struct FolderFilter: View {
+private enum MeetingFilter: Equatable {
+    case all, folder(String), trash
+
+    var folderID: String? {
+        if case .folder(let id) = self { return id }
+        return nil
+    }
+}
+
+private struct FolderFilter: View {
     let folders: [Folder]
-    let selected: String?
-    let pick: (String?) -> Void
+    let hasTrash: Bool
+    let selected: MeetingFilter
+    let pick: (MeetingFilter) -> Void
 
     var body: some View {
         ScrollView(.horizontal) {
             HStack(spacing: 8) {
-                chip(S.allMeetings, id: nil)
-                ForEach(folders) { chip($0.name, id: $0.id) }
+                chip(S.allMeetings, id: .all)
+                ForEach(folders) { chip($0.name, id: .folder($0.id)) }
+                if hasTrash { chip(S.trash, id: .trash) }
             }
             .padding(.horizontal, 20)
         }
@@ -224,7 +253,7 @@ struct FolderFilter: View {
         .padding(.horizontal, -20)
     }
 
-    private func chip(_ name: String, id: String?) -> some View {
+    private func chip(_ name: String, id: MeetingFilter) -> some View {
         let on = selected == id
         return Button { pick(id) } label: {
             Text(name)
