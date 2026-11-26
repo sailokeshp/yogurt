@@ -41,9 +41,15 @@ function renderNotes(md) {
   return html;
 }
 
+const brandEl = document.getElementById('brand');
+
+// Home shows the Yogurt mark + wordmark; other screens show a title with a back button.
 function setChrome({ title, back }) {
-  titleEl.textContent = title;
-  document.title = title === 'Yogurt' ? 'Yogurt' : `${title} · Yogurt`;
+  const isHome = title === 'Yogurt';
+  brandEl.hidden = !isHome;
+  titleEl.hidden = isHome;
+  titleEl.textContent = isHome ? '' : title;
+  document.title = isHome ? 'Yogurt' : `${title} · Yogurt`;
   backBtn.hidden = !back;
 }
 
@@ -57,7 +63,11 @@ let searchTimer;
 async function home() {
   setChrome({ title: 'Yogurt', back: false });
   view.innerHTML = `
-    <input id="q" type="search" placeholder="Search meetings" aria-label="Search meetings" enterkeyhint="search">
+    <h2 class="page-title">Meetings</h2>
+    <div class="search">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="q" type="search" placeholder="Search meetings" aria-label="Search meetings" enterkeyhint="search">
+    </div>
     <ul id="list" class="list"></ul>`;
   const list = document.getElementById('list');
   const q = document.getElementById('q');
@@ -70,11 +80,11 @@ async function home() {
             .map(
               (m) => `<li><a class="card" href="#/m/${esc(m.id)}">
                 <h2>${esc(m.title)}</h2>
-                <span class="meta">${fmtDate(m.created_at)}</span>
+                <span class="chip">${fmtDate(m.created_at)}</span>
                 <p>${esc((m.preview || '').replace(/[#*\-]/g, '').trim())}</p></a></li>`,
             )
             .join('')
-        : `<li class="empty">${q.value ? 'No matches.' : 'No meetings yet. Tap Record to start.'}</li>`;
+        : `<li class="empty"><i class="mark" aria-hidden="true"></i><span>${q.value ? 'No matches.' : 'No meetings yet. Tap Record to start.'}</span></li>`;
     } catch (e) {
       list.innerHTML = `<li class="empty">${esc(e.message)}</li>`;
     }
@@ -142,7 +152,10 @@ function newMeeting() {
   view.innerHTML = `
     <div class="recorder">
       ${canRecord
-        ? `<button id="rec" class="rec-btn" type="button">Record</button>
+        ? `<div id="stage" class="stage"><button id="rec" class="rec-btn" type="button" aria-label="Start recording">
+             <svg class="ico-mic" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+             <svg class="ico-stop" viewBox="0 0 24 24" width="44" height="44" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="3"/></svg>
+           </button></div>
            <div id="timer" class="timer" aria-live="off">0:00</div>`
         : '<p class="status error">Recording isn\'t supported in this browser. Upload a file instead.</p>'}
       <div id="status" class="status"></div>
@@ -155,6 +168,7 @@ function newMeeting() {
   const statusEl = document.getElementById('status');
   const liveEl = document.getElementById('live');
   const recBtn = document.getElementById('rec');
+  const stage = document.getElementById('stage');
   const timerEl = document.getElementById('timer');
   const fileInput = document.getElementById('file');
 
@@ -216,6 +230,33 @@ function newMeeting() {
 
   const mime = pickMime();
 
+  // Live mic level drives the pulsing ring behind the record button.
+  let audioCtx, meterRaf;
+  function startMeter() {
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      audioCtx.createMediaStreamSource(stream).connect(analyser);
+      const data = new Uint8Array(analyser.fftSize);
+      let level = 0;
+      const frame = () => {
+        analyser.getByteTimeDomainData(data);
+        let peak = 0;
+        for (const v of data) peak = Math.max(peak, Math.abs(v - 128));
+        level += (Math.min(peak / 64, 1) - level) * 0.25;
+        stage.style.setProperty('--level', level.toFixed(3));
+        meterRaf = requestAnimationFrame(frame);
+      };
+      frame();
+    } catch { /* the ring is decorative */ }
+  }
+  function stopMeter() {
+    cancelAnimationFrame(meterRaf);
+    stage.style.removeProperty('--level');
+    audioCtx?.close().catch(() => {});
+  }
+
   function startSegment() {
     const chunks = [];
     recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
@@ -243,8 +284,10 @@ function newMeeting() {
     recording = true;
     try { wakeLock = await navigator.wakeLock?.request('screen'); } catch { /* optional */ }
     startedAt = Date.now();
-    recBtn.textContent = 'Stop';
+    recBtn.setAttribute('aria-label', 'Stop recording');
     recBtn.classList.add('live');
+    stage.classList.add('live');
+    startMeter();
     setStatus('Recording. Keep this screen open.');
     tick = setInterval(() => {
       const s = Math.floor((Date.now() - startedAt) / 1000);
@@ -259,7 +302,8 @@ function newMeeting() {
     clearInterval(tick);
     recBtn.disabled = true;
     recBtn.classList.remove('live');
-    recBtn.textContent = '…';
+    stage.classList.remove('live');
+    stopMeter();
     setStatus('Transcribing…');
     await new Promise((resolve) => {
       const r = recorder;
@@ -276,7 +320,7 @@ function newMeeting() {
     } catch (e) {
       setStatus(e.message, true);
       recBtn.disabled = false;
-      recBtn.textContent = 'Record';
+      recBtn.setAttribute('aria-label', 'Start recording');
     }
   }
 

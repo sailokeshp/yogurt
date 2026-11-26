@@ -3,23 +3,35 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#fbf7ef" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#16140f" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#18191d" media="(prefers-color-scheme: dark)">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
   <title>Yogurt</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon.svg">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <header class="bar">
-    <button id="back" class="icon-btn" aria-label="Back" hidden>‹</button>
-    <h1 id="title">Yogurt</h1>
+    <button id="back" class="back" aria-label="Back" hidden>
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+    </button>
+    <span id="brand" class="brand" aria-label="Yogurt"><i class="mark" aria-hidden="true"></i><i class="word" aria-hidden="true"></i></span>
+    <h1 id="title" hidden></h1>
   </header>
 
   <main id="view" aria-live="polite"></main>
 
   <nav class="tabs" aria-label="Main">
-    <a href="#/" data-tab="home">Meetings</a>
-    <a href="#/new" data-tab="new">Record</a>
+    <a href="#/" data-tab="home">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+      <span>Meetings</span>
+    </a>
+    <a href="#/new" data-tab="new">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+      <span>Record</span>
+    </a>
   </nav>
 
   <script type="module" src="/app.js"></script>
