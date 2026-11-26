@@ -15,12 +15,15 @@ on your device. Audio is sent to Cloudflare for processing.
 
 ## Run it
 
+The D1 database `yogurt` already exists in the Cloudflare account (its id is in
+`wrangler.jsonc`) and the `meetings` table is created. If you deploy to a different
+account, run `npx wrangler d1 create yogurt`, paste the new id into `wrangler.jsonc`,
+then `npm run db:init:remote`.
+
 ```sh
 cd web
 npm install
 npx wrangler login
-npx wrangler d1 create yogurt          # paste the printed database_id into wrangler.jsonc
-npm run db:init:remote                 # create the table
 npm run deploy
 ```
 

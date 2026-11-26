@@ -14,8 +14,7 @@
     {
       "binding": "DB",
       "database_name": "yogurt",
-      // Run `npx wrangler d1 create yogurt` and paste the printed id here.
-      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID",
+      "database_id": "c51bc209-348f-4d83-b376-f02d1c8dee96",
       "migrations_dir": "migrations"
     }
   ],
