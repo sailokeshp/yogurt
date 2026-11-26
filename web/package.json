@@ -1,0 +1,19 @@
+{
+  "name": "yogurt-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Mobile-first web version of Yogurt that runs on Cloudflare Workers AI",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "db:init": "wrangler d1 migrations apply yogurt --local",
+    "db:init:remote": "wrangler d1 migrations apply yogurt --remote"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261125.1",
+    "typescript": "5.9.3",
+    "wrangler": "4.168.0"
+  }
+}
