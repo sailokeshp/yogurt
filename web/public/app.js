@@ -41,15 +41,16 @@ function renderNotes(md) {
   return html;
 }
 
+const BRAND = 'Tiger Note Taker';
 const brandEl = document.getElementById('brand');
 
-// Home shows the Yogurt mark + wordmark; other screens show a title with a back button.
+// Home shows the Tiger Note Taker mark + name; other screens show a title with a back button.
 function setChrome({ title, back }) {
-  const isHome = title === 'Yogurt';
+  const isHome = title === BRAND;
   brandEl.hidden = !isHome;
   titleEl.hidden = isHome;
   titleEl.textContent = isHome ? '' : title;
-  document.title = isHome ? 'Yogurt' : `${title} · Yogurt`;
+  document.title = isHome ? BRAND : `${title} · ${BRAND}`;
   backBtn.hidden = !back;
 }
 
@@ -61,7 +62,7 @@ backBtn.addEventListener('click', () => {
 /* ---------- Home: meeting list ---------- */
 let searchTimer;
 async function home() {
-  setChrome({ title: 'Yogurt', back: false });
+  setChrome({ title: BRAND, back: false });
   view.innerHTML = `
     <h2 class="page-title">Meetings</h2>
     <div class="search">
@@ -327,16 +328,63 @@ function newMeeting() {
   recBtn.addEventListener('click', () => (recording ? stop() : start()));
 }
 
+/* ---------- Settings + theme ---------- */
+const themeMeta = document.querySelector('meta[name="theme-color"]');
+const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+
+function savedTheme() {
+  try { return localStorage.getItem('theme') || 'system'; } catch { return 'system'; }
+}
+
+function applyTheme(choice) {
+  const root = document.documentElement;
+  if (choice === 'light' || choice === 'dark') root.dataset.theme = choice;
+  else delete root.dataset.theme;
+  try { choice === 'system' ? localStorage.removeItem('theme') : localStorage.setItem('theme', choice); } catch { /* storage may be blocked */ }
+  const dark = choice === 'dark' || (choice === 'system' && darkQuery.matches);
+  themeMeta.setAttribute('content', dark ? '#0e1424' : '#ffffff');
+}
+
+darkQuery.addEventListener('change', () => applyTheme(savedTheme()));
+applyTheme(savedTheme());
+
+function settings() {
+  setChrome({ title: BRAND, back: false });
+  const current = savedTheme();
+  const opt = (v, label) => `<button type="button" data-theme="${v}" aria-pressed="${current === v}">${label}</button>`;
+  view.innerHTML = `
+    <h2 class="page-title">Settings</h2>
+    <section class="group">
+      <h3>Appearance</h3>
+      <div class="seg" role="group" aria-label="Theme">
+        ${opt('system', 'System')}${opt('light', 'Light')}${opt('dark', 'Dark')}
+      </div>
+    </section>
+    <section class="group">
+      <h3>About</h3>
+      <div class="about"><i class="mark" aria-hidden="true"></i>
+        <div><strong>${BRAND}</strong><span>Record a meeting and get a transcript and notes.</span></div></div>
+    </section>`;
+  view.querySelectorAll('[data-theme]').forEach((b) =>
+    b.addEventListener('click', () => {
+      applyTheme(b.dataset.theme);
+      view.querySelectorAll('[data-theme]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    }),
+  );
+}
+
 /* ---------- Router ---------- */
 function router() {
   const hash = location.hash || '#/';
   const detailMatch = hash.match(/^#\/m\/([\w-]+)$/);
   tabs.forEach((a) => {
-    const active = (a.dataset.tab === 'new' && hash === '#/new') || (a.dataset.tab === 'home' && hash !== '#/new');
+    const page = hash === '#/new' ? 'new' : hash === '#/settings' ? 'settings' : 'home';
+    const active = a.dataset.tab === page;
     if (active) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   });
   if (detailMatch) detail(detailMatch[1]);
   else if (hash === '#/new') newMeeting();
+  else if (hash === '#/settings') settings();
   else home();
 }
 
