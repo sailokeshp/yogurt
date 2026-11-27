@@ -21,6 +21,7 @@ async function api(path, options) {
 
 // Tiny, safe Markdown: escape first, then handle headings and bullets only.
 function renderNotes(md) {
+  if (!md || !md.trim()) return '<p class="status">No notes yet. Pick a style above and tap Rewrite.</p>';
   const lines = esc(md).split('\n');
   let html = '';
   let inList = false;

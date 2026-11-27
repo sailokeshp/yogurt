@@ -29,10 +29,12 @@ function toBase64(bytes: Uint8Array): string {
 // Workers AI chat models return either {response} or an OpenAI-style {choices}.
 function chatText(result: unknown): string {
   const r = result as {
-    response?: string;
+    response?: string | null;
     choices?: { message?: { content?: string | null } }[];
   };
-  return (r.response ?? r.choices?.[0]?.message?.content ?? '').toString().trim();
+  const text = (r.choices?.[0]?.message?.content ?? r.response ?? '').toString();
+  // Drop any leaked reasoning block so only the answer is kept.
+  return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 }
 
 async function chat(env: Env, system: string, user: string, maxTokens = 1500): Promise<string> {
@@ -42,6 +44,8 @@ async function chat(env: Env, system: string, user: string, maxTokens = 1500): P
       { role: 'user', content: user },
     ],
     max_tokens: maxTokens,
+    // Gemma 4 reasons by default and the reasoning eats the token budget, leaving an empty answer.
+    chat_template_kwargs: { enable_thinking: false },
   } as never);
   return chatText(result);
 }
@@ -148,10 +152,21 @@ async function createMeeting(request: Request, env: Env): Promise<Response> {
   const transcript = body?.transcript?.trim();
   if (!transcript) return fail(400, 'Transcript is required.');
 
-  const [notes, title] = await Promise.all([
-    makeNotes(env, transcript, asStyle(body?.style)),
-    body?.title?.trim() ? Promise.resolve(body.title.trim()) : makeTitle(env, transcript),
+  // Never lose the transcript: if the model fails, save it anyway and let the user tap Rewrite.
+  const safe = async <T>(work: Promise<T>, fallback: T): Promise<T> => {
+    try {
+      return await work;
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : err);
+      return fallback;
+    }
+  };
+  const fallbackTitle = transcript.split(/\s+/).slice(0, 6).join(' ') || 'Untitled meeting';
+  const [notes, aiTitle] = await Promise.all([
+    safe(makeNotes(env, transcript, asStyle(body?.style)), ''),
+    body?.title?.trim() ? Promise.resolve(body.title.trim()) : safe(makeTitle(env, transcript), ''),
   ]);
+  const title = aiTitle && aiTitle !== 'Untitled meeting' ? aiTitle : fallbackTitle;
   const meeting = { id: crypto.randomUUID(), title, transcript, notes, created_at: Date.now() };
   await env.DB.prepare(
     'INSERT INTO meetings (id, title, transcript, notes, created_at) VALUES (?, ?, ?, ?, ?)',
@@ -204,6 +219,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     }
 
     const notes = await makeNotes(env, row.transcript, asStyle(body.style));
+    if (!notes) return fail(502, 'The AI returned no notes. Please try again.');
     await env.DB.prepare('UPDATE meetings SET notes = ? WHERE id = ?').bind(notes, action[1]).run();
     return json({ notes });
   }
