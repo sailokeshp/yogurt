@@ -104,32 +104,129 @@ async function detail(id) {
   try {
     const m = await api(`/api/meetings/${encodeURIComponent(id)}`);
     setChrome({ title: m.title, back: true });
+    const words = m.transcript.trim().split(/\s+/).length;
     view.innerHTML = `
-      <p class="meta">${fmtDate(m.created_at)}</p>
+      <div class="chips">
+        <span class="chip">${fmtDate(m.created_at)}</span>
+        <span class="chip">${words.toLocaleString()} words</span>
+        <span class="chip">~${Math.max(1, Math.round(words / 150))} min</span>
+      </div>
       <div class="seg" role="group" aria-label="View">
         <button type="button" data-v="notes" aria-pressed="true">Notes</button>
         <button type="button" data-v="transcript" aria-pressed="false">Transcript</button>
       </div>
+      <div id="restyle" class="restyle">
+        <label class="field inline"><span>Rewrite notes as</span>
+          <select id="style">
+            <option value="standard">Standard</option>
+            <option value="brief">Brief</option>
+            <option value="detailed">Detailed</option>
+            <option value="actions">Action items only</option>
+          </select>
+        </label>
+        <button class="btn" id="regen" type="button">Rewrite</button>
+      </div>
       <div id="body" class="prose">${renderNotes(m.notes)}</div>
+
+      <section class="group">
+        <h3>Ask about this meeting</h3>
+        <form id="askform" class="ask">
+          <input id="q" type="text" placeholder="e.g. What did we decide about launch?" autocomplete="off" enterkeyhint="send" maxlength="500">
+          <button class="btn primary" type="submit">Ask</button>
+        </form>
+        <div id="answers" class="answers"></div>
+      </section>
+
       <div class="actions">
         <button class="btn" id="copy" type="button">Copy</button>
+        <button class="btn" id="share" type="button">Share / Save</button>
+        <button class="btn" id="rename" type="button">Rename</button>
         <button class="btn danger" id="del" type="button">Delete</button>
       </div>`;
     let current = 'notes';
     const body = document.getElementById('body');
+    const restyle = document.getElementById('restyle');
+    const draw = () => {
+      restyle.hidden = current !== 'notes';
+      if (current === 'notes') { body.className = 'prose'; body.innerHTML = renderNotes(m.notes); }
+      else { body.className = 'prose transcript'; body.textContent = m.transcript; }
+    };
     view.querySelectorAll('.seg button').forEach((b) =>
       b.addEventListener('click', () => {
         current = b.dataset.v;
         view.querySelectorAll('.seg button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
-        if (current === 'notes') { body.className = 'prose'; body.innerHTML = renderNotes(m.notes); }
-        else { body.className = 'prose transcript'; body.textContent = m.transcript; }
+        draw();
       }),
     );
+
+    const regen = document.getElementById('regen');
+    regen.addEventListener('click', async () => {
+      regen.disabled = true; regen.textContent = 'Writing…';
+      try {
+        const r = await api(`/api/meetings/${encodeURIComponent(id)}/regenerate`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ style: document.getElementById('style').value }),
+        });
+        m.notes = r.notes; draw();
+      } catch (e) { alert(e.message); }
+      regen.disabled = false; regen.textContent = 'Rewrite';
+    });
+
+    document.getElementById('askform').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const input = document.getElementById('q');
+      const question = input.value.trim();
+      if (!question) return;
+      const answers = document.getElementById('answers');
+      const item = document.createElement('div');
+      item.className = 'qa';
+      item.innerHTML = `<p class="q">${esc(question)}</p><p class="a">Thinking…</p>`;
+      answers.prepend(item);
+      input.value = '';
+      try {
+        const r = await api(`/api/meetings/${encodeURIComponent(id)}/ask`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ question }),
+        });
+        item.querySelector('.a').textContent = r.answer;
+      } catch (e) {
+        item.querySelector('.a').textContent = e.message;
+        item.querySelector('.a').classList.add('error');
+      }
+    });
+
+    const asText = () => `# ${m.title}\n${fmtDate(m.created_at)}\n\n${m.notes}\n\n## Transcript\n\n${m.transcript}\n`;
     document.getElementById('copy').addEventListener('click', async (ev) => {
       const text = current === 'notes' ? m.notes : m.transcript;
       try { await navigator.clipboard.writeText(text); ev.target.textContent = 'Copied'; }
       catch { ev.target.textContent = 'Copy failed'; }
       setTimeout(() => (ev.target.textContent = 'Copy'), 1500);
+    });
+    document.getElementById('share').addEventListener('click', async () => {
+      const file = new File([asText()], `${m.title.replace(/[^\w\- ]+/g, '').trim() || 'meeting'}.md`, { type: 'text/markdown' });
+      try {
+        if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file], title: m.title });
+        else if (navigator.share) await navigator.share({ title: m.title, text: asText() });
+        else {
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(file); a.download = file.name; a.click();
+          setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+        }
+      } catch { /* user cancelled the share sheet */ }
+    });
+    document.getElementById('rename').addEventListener('click', async () => {
+      const title = prompt('Meeting title', m.title)?.trim();
+      if (!title || title === m.title) return;
+      try {
+        await api(`/api/meetings/${encodeURIComponent(id)}`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ title }),
+        });
+        m.title = title; setChrome({ title, back: true });
+      } catch (e) { alert(e.message); }
     });
     document.getElementById('del').addEventListener('click', async () => {
       if (!confirm('Delete this meeting?')) return;
@@ -157,10 +254,22 @@ function newMeeting() {
              <svg class="ico-mic" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
              <svg class="ico-stop" viewBox="0 0 24 24" width="44" height="44" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="3"/></svg>
            </button></div>
-           <div id="timer" class="timer" aria-live="off">0:00</div>`
+           <div id="timer" class="timer" aria-live="off">0:00</div>
+           <button id="pause" class="btn" type="button" hidden>
+             <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1.5"/><rect x="14" y="5" width="4" height="14" rx="1.5"/></svg>
+             <span>Pause</span>
+           </button>`
         : '<p class="status error">Recording isn\'t supported in this browser. Upload a file instead.</p>'}
       <div id="status" class="status"></div>
       <div id="live" class="live-text" hidden></div>
+      <label class="field"><span>Notes style</span>
+        <select id="style">
+          <option value="standard">Standard: summary, points, actions</option>
+          <option value="brief">Brief: quick summary</option>
+          <option value="detailed">Detailed: full minutes</option>
+          <option value="actions">Action items only</option>
+        </select>
+      </label>
       <div class="divider">or</div>
       <label class="btn block" for="file">Upload an audio file</label>
       <input id="file" type="file" accept="audio/*" hidden>
@@ -172,6 +281,8 @@ function newMeeting() {
   const stage = document.getElementById('stage');
   const timerEl = document.getElementById('timer');
   const fileInput = document.getElementById('file');
+  const styleSel = document.getElementById('style');
+  const pauseBtn = document.getElementById('pause');
 
   const setStatus = (msg, isError = false) => {
     statusEl.textContent = msg;
@@ -201,7 +312,7 @@ function newMeeting() {
     const m = await api('/api/meetings', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ transcript }),
+      body: JSON.stringify({ transcript, style: styleSel.value }),
     });
     location.hash = `#/m/${m.id}`;
   }
@@ -224,8 +335,10 @@ function newMeeting() {
   if (!canRecord) return;
 
   let stream, recorder, segTimer, tick, wakeLock;
-  let startedAt = 0;
+  let runStart = 0; // when the current un-paused stretch began
+  let elapsedBefore = 0; // seconds recorded before the current stretch
   let recording = false;
+  let paused = false;
   let queue = Promise.resolve();
   let queueError = null;
 
@@ -267,7 +380,7 @@ function newMeeting() {
       if (blob.size > 0) {
         queue = queue.then(() => transcribeBlob(blob)).catch((e) => { queueError = e; });
       }
-      if (recording) startSegment();
+      if (recording && !paused) startSegment();
     };
     recorder.start();
     segTimer = setTimeout(() => recorder.state === 'recording' && recorder.stop(), SEGMENT_MS);
@@ -284,24 +397,64 @@ function newMeeting() {
     queueError = null;
     recording = true;
     try { wakeLock = await navigator.wakeLock?.request('screen'); } catch { /* optional */ }
-    startedAt = Date.now();
+    paused = false;
+    elapsedBefore = 0;
+    runStart = Date.now();
+    pauseBtn.hidden = false;
     recBtn.setAttribute('aria-label', 'Stop recording');
     recBtn.classList.add('live');
     stage.classList.add('live');
     startMeter();
     setStatus('Recording. Keep this screen open.');
-    tick = setInterval(() => {
-      const s = Math.floor((Date.now() - startedAt) / 1000);
-      timerEl.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-    }, 500);
+    tick = setInterval(renderTimer, 500);
     startSegment();
   }
+
+  function renderTimer() {
+    const s = Math.floor(elapsedBefore + (paused ? 0 : (Date.now() - runStart) / 1000));
+    timerEl.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+
+  const setPauseLabel = (label, icon) => {
+    pauseBtn.querySelector('span').textContent = label;
+    pauseBtn.querySelector('svg').innerHTML = icon;
+  };
+
+  // Pause closes the current segment (so its audio is transcribed right away) and stops the clock.
+  function pause() {
+    if (!recording || paused) return;
+    paused = true;
+    elapsedBefore += (Date.now() - runStart) / 1000;
+    clearTimeout(segTimer);
+    if (recorder.state !== 'inactive') recorder.stop();
+    stream.getAudioTracks().forEach((t) => (t.enabled = false));
+    stage.classList.remove('live');
+    stage.style.setProperty('--level', '0');
+    setPauseLabel('Resume', '<path d="M8 5.5v13a1 1 0 0 0 1.5.9l10.5-6.5a1 1 0 0 0 0-1.8L9.5 4.6A1 1 0 0 0 8 5.5Z"/>');
+    setStatus('Paused. Tap Resume to keep going.');
+    renderTimer();
+  }
+
+  function resume() {
+    if (!recording || !paused) return;
+    paused = false;
+    runStart = Date.now();
+    stream.getAudioTracks().forEach((t) => (t.enabled = true));
+    stage.classList.add('live');
+    setPauseLabel('Pause', '<rect x="6" y="5" width="4" height="14" rx="1.5"/><rect x="14" y="5" width="4" height="14" rx="1.5"/>');
+    setStatus('Recording. Keep this screen open.');
+    startSegment();
+  }
+
+  pauseBtn.addEventListener('click', () => (paused ? resume() : pause()));
 
   async function stop() {
     recording = false;
     clearTimeout(segTimer);
     clearInterval(tick);
     recBtn.disabled = true;
+    pauseBtn.hidden = true;
+    paused = false;
     recBtn.classList.remove('live');
     stage.classList.remove('live');
     stopMeter();

@@ -46,11 +46,38 @@ async function chat(env: Env, system: string, user: string, maxTokens = 1500): P
   return chatText(result);
 }
 
-const NOTES_SYSTEM =
-  'You write concise meeting notes from a transcript. Use Markdown with these sections: ' +
-  '"## Summary" (2-4 sentences), "## Key points" (bullets), "## Decisions" (bullets, omit if none), ' +
-  '"## Action items" (bullets with owner if stated, omit if none). Only use facts from the transcript. ' +
-  'Do not invent names, dates or numbers.';
+const FACTS = ' Only use facts from the transcript. Do not invent names, dates or numbers.';
+
+const STYLES = {
+  standard: {
+    system:
+      'You write concise meeting notes from a transcript. Use Markdown with these sections: ' +
+      '"## Summary" (2-4 sentences), "## Key points" (bullets), "## Decisions" (bullets, omit if none), ' +
+      '"## Action items" (bullets with owner if stated, omit if none).' + FACTS,
+    maxTokens: 1500,
+  },
+  brief: {
+    system:
+      'Summarize the meeting in Markdown: a "## Summary" of at most 3 sentences, then "## Key points" with 3 to 5 short bullets.' + FACTS,
+    maxTokens: 500,
+  },
+  detailed: {
+    system:
+      'You write thorough meeting minutes in Markdown with these sections: "## Summary", "## Topics discussed" ' +
+      '(a "###" subheading per topic with bullets), "## Decisions", "## Action items" (owner and deadline if stated), ' +
+      '"## Open questions". Omit a section if it has nothing.' + FACTS,
+    maxTokens: 2500,
+  },
+  actions: {
+    system:
+      'Extract only the follow-ups in Markdown: "## Action items" (bullets, owner and deadline if stated) and ' +
+      '"## Decisions" (bullets). Omit a section if empty. If there are none at all, say so in one line.' + FACTS,
+    maxTokens: 700,
+  },
+} as const;
+
+type Style = keyof typeof STYLES;
+const asStyle = (v: unknown): Style => (typeof v === 'string' && v in STYLES ? (v as Style) : 'standard');
 
 function splitTranscript(text: string): string[] {
   if (text.length <= CHUNK_CHARS) return [text];
@@ -66,10 +93,11 @@ function splitTranscript(text: string): string[] {
   return parts;
 }
 
-async function makeNotes(env: Env, transcript: string): Promise<string> {
+async function makeNotes(env: Env, transcript: string, style: Style = 'standard'): Promise<string> {
+  const { system, maxTokens } = STYLES[style];
   const parts = splitTranscript(transcript);
   if (parts.length === 1) {
-    return chat(env, NOTES_SYSTEM, `Transcript:\n\n${parts[0]}`);
+    return chat(env, system, `Transcript:\n\n${parts[0]}`, maxTokens);
   }
   const partials: string[] = [];
   for (const [i, part] of parts.entries()) {
@@ -82,7 +110,7 @@ async function makeNotes(env: Env, transcript: string): Promise<string> {
       ),
     );
   }
-  return chat(env, NOTES_SYSTEM, `Section summaries of one meeting:\n\n${partials.join('\n\n')}`);
+  return chat(env, system, `Section summaries of one meeting:\n\n${partials.join('\n\n')}`, maxTokens);
 }
 
 async function makeTitle(env: Env, transcript: string): Promise<string> {
@@ -115,12 +143,13 @@ async function createMeeting(request: Request, env: Env): Promise<Response> {
   const body = (await request.json().catch(() => null)) as {
     transcript?: string;
     title?: string;
+    style?: string;
   } | null;
   const transcript = body?.transcript?.trim();
   if (!transcript) return fail(400, 'Transcript is required.');
 
   const [notes, title] = await Promise.all([
-    makeNotes(env, transcript),
+    makeNotes(env, transcript, asStyle(body?.style)),
     body?.title?.trim() ? Promise.resolve(body.title.trim()) : makeTitle(env, transcript),
   ]);
   const meeting = { id: crypto.randomUUID(), title, transcript, notes, created_at: Date.now() };
@@ -153,12 +182,45 @@ async function route(request: Request, env: Env): Promise<Response> {
     return json(results);
   }
 
+  const action = path.match(/^\/api\/meetings\/([\w-]+)\/(ask|regenerate)$/);
+  if (action && method === 'POST') {
+    const row = await env.DB.prepare('SELECT transcript FROM meetings WHERE id = ?')
+      .bind(action[1])
+      .first<{ transcript: string }>();
+    if (!row) return fail(404, 'Meeting not found.');
+    const body = (await request.json().catch(() => ({}))) as { question?: string; style?: string };
+
+    if (action[2] === 'ask') {
+      const question = body.question?.trim().slice(0, 500);
+      if (!question) return fail(400, 'Question is required.');
+      const answer = await chat(
+        env,
+        'Answer the question using only the meeting transcript below. Be brief and direct. ' +
+          'If the transcript does not contain the answer, say you cannot find it in this meeting.',
+        `Transcript:\n\n${row.transcript.slice(0, 120_000)}\n\nQuestion: ${question}`,
+        600,
+      );
+      return json({ answer: answer || 'No answer was produced.' });
+    }
+
+    const notes = await makeNotes(env, row.transcript, asStyle(body.style));
+    await env.DB.prepare('UPDATE meetings SET notes = ? WHERE id = ?').bind(notes, action[1]).run();
+    return json({ notes });
+  }
+
   const match = path.match(/^\/api\/meetings\/([\w-]+)$/);
   if (match) {
     const id = match[1];
     if (method === 'GET') {
       const row = await env.DB.prepare('SELECT * FROM meetings WHERE id = ?').bind(id).first();
       return row ? json(row) : fail(404, 'Meeting not found.');
+    }
+    if (method === 'PATCH') {
+      const body = (await request.json().catch(() => null)) as { title?: string } | null;
+      const title = body?.title?.trim().slice(0, 80);
+      if (!title) return fail(400, 'Title is required.');
+      await env.DB.prepare('UPDATE meetings SET title = ? WHERE id = ?').bind(title, id).run();
+      return json({ title });
     }
     if (method === 'DELETE') {
       await env.DB.prepare('DELETE FROM meetings WHERE id = ?').bind(id).run();
